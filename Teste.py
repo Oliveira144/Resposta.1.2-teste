@@ -3,13 +3,16 @@ import streamlit as st
 # =====================================================
 # CONFIGURAÇÃO
 # =====================================================
-st.set_page_config(page_title="Football Studio PRO ULTIMATE", layout="centered")
+st.set_page_config(
+    page_title="Football Studio PRO ULTIMATE",
+    layout="centered"
+)
 
 # =====================================================
 # ESTADOS
 # =====================================================
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = []  # R, B, D (recente -> antigo)
 
 if "cycle_memory" not in st.session_state:
     st.session_state.cycle_memory = []
@@ -31,30 +34,39 @@ st.title("⚽ Football Studio – PRO ULTIMATE")
 c1, c2, c3 = st.columns(3)
 if c1.button("🔴 Home"):
     st.session_state.history.insert(0, "R")
-    st.session_state.rounds_without_draw += 1
-
 if c2.button("🔵 Away"):
     st.session_state.history.insert(0, "B")
-    st.session_state.rounds_without_draw += 1
-
-if c3.button("🟡 Empate"):
+if c3.button("🟡 Draw"):
     st.session_state.history.insert(0, "D")
-    st.session_state.rounds_without_draw = 0
 
 st.markdown(f"### 💰 Banca: R$ {st.session_state.bank:.2f}")
 st.markdown(f"### 📈 Lucro: R$ {st.session_state.profit:.2f}")
 
 # =====================================================
-# HISTÓRICO (RECENTE → ANTIGO)
+# CONTADOR DE DRAW
 # =====================================================
-st.markdown("## 📊 Histórico (Recente → Antigo)")
-st.write(" ".join(
-    ["🔴" if x == "R" else "🔵" if x == "B" else "🟡"
-     for x in st.session_state.history[:50]]
-))
+if st.session_state.history:
+    if st.session_state.history[0] == "D":
+        st.session_state.rounds_without_draw = 0
+    else:
+        st.session_state.rounds_without_draw += 1
 
 # =====================================================
-# EXTRAÇÃO DE BLOCOS (EMPATE COMO EVENTO)
+# HISTÓRICO (RECENTE → ANTIGO, ESQ → DIR)
+# =====================================================
+st.markdown("## 📊 Histórico (Recente → Antigo)")
+
+def icon(x):
+    if x == "R":
+        return "🔴"
+    if x == "B":
+        return "🔵"
+    return "🟡"
+
+st.write(" ".join(icon(x) for x in st.session_state.history[:30]))
+
+# =====================================================
+# EXTRAÇÃO DE BLOCOS (INCLUINDO DRAW)
 # =====================================================
 def extract_blocks(hist):
     if not hist:
@@ -68,36 +80,29 @@ def extract_blocks(hist):
         if hist[i] == current:
             size += 1
         else:
-            blocks.append({
-                "color": current,
-                "size": size,
-                "type": classify_block(current, size)
-            })
+            blocks.append({"color": current, "size": size})
             current = hist[i]
             size = 1
 
-    blocks.append({
-        "color": current,
-        "size": size,
-        "type": classify_block(current, size)
-    })
+    blocks.append({"color": current, "size": size})
+
+    for b in blocks:
+        if b["color"] == "D":
+            b["type"] = "DRAW"
+        elif b["size"] == 1:
+            b["type"] = "CHOPPY"
+        elif b["size"] == 2:
+            b["type"] = "DUPLO CURTO"
+        elif b["size"] == 3:
+            b["type"] = "TRIPLO"
+        elif b["size"] >= 6:
+            b["type"] = "STREAK FORTE"
+        elif b["size"] >= 4:
+            b["type"] = "STREAK"
+        else:
+            b["type"] = "DECAIMENTO"
 
     return blocks
-
-def classify_block(color, size):
-    if color == "D":
-        return "EMPATE"
-    if size == 1:
-        return "CHOPPY"
-    if size == 2:
-        return "DUPLO CURTO"
-    if size == 3:
-        return "TRIPLO"
-    if size >= 6:
-        return "STREAK FORTE"
-    if size >= 4:
-        return "STREAK"
-    return "DECAIMENTO"
 
 # =====================================================
 # MEMÓRIA DE 3 CICLOS
@@ -106,25 +111,34 @@ def update_cycle_memory(blocks):
     if not blocks:
         return
 
-    last = blocks[0]["type"]
+    last_type = blocks[0]["type"]
     mem = st.session_state.cycle_memory
 
-    if not mem or mem[-1] != last:
-        mem.append(last)
+    if not mem or mem[-1] != last_type:
+        mem.append(last_type)
 
     if len(mem) > 3:
         mem[:] = mem[-3:]
 
 # =====================================================
-# DETECÇÃO DE PADRÕES
+# DETECTOR DE PADRÕES (BLINDADO)
 # =====================================================
 def detect_patterns(blocks):
     patterns = []
+
+    if not blocks:
+        return patterns
+
     sizes = [b["size"] for b in blocks]
     colors = [b["color"] for b in blocks]
     types = [b["type"] for b in blocks]
 
-    # CURTOS
+    if not types:
+        return patterns
+
+    # ===============================
+    # CURTOS / ALTERNÂNCIA
+    # ===============================
     if types[0] == "CHOPPY":
         patterns.append((colors[0], 55, "CURTO"))
 
@@ -134,24 +148,32 @@ def detect_patterns(blocks):
     if len(types) >= 3 and types[:3] == ["CHOPPY"] * 3:
         patterns.append((colors[0], 60, "1x1x1"))
 
+    # ===============================
     # STREAKS
+    # ===============================
     if types[0] == "STREAK":
         patterns.append((colors[0], 52, "STREAK"))
 
     if types[0] == "STREAK FORTE":
         patterns.append((colors[0], 55, "STREAK FORTE"))
 
+    # ===============================
     # DECAIMENTO
+    # ===============================
     if len(sizes) >= 3 and sizes[0] < sizes[1] < sizes[2]:
         patterns.append((colors[0], 57, "DECAIMENTO"))
 
-    # PADRÃO COMPOSTO
+    # ===============================
+    # PADRÕES COMPOSTOS (4x4x3x2x...)
+    # ===============================
     if len(sizes) >= 5:
         patterns.append((colors[0], 61, f"PADRÃO COMPOSTO {sizes[:8]}"))
 
-    # EMPATE (DRAW HUNTING)
-    if st.session_state.rounds_without_draw >= 35:
-        patterns.append(("D", 64, "DRAW HUNTING"))
+    # ===============================
+    # DRAW HUNTING (EMPATE)
+    # ===============================
+    if st.session_state.rounds_without_draw >= 30:
+        patterns.append(("D", 65, "DRAW HUNTING"))
 
     return patterns
 
@@ -163,26 +185,40 @@ def ia_decision(hist):
     update_cycle_memory(blocks)
 
     patterns = detect_patterns(blocks)
+
     if not patterns:
         return "⏳ AGUARDAR", 0, "SEM PADRÃO"
 
     color, score, pattern = max(patterns, key=lambda x: x[1])
     mem = st.session_state.cycle_memory
 
-    if score >= 52:
-        if color == "D":
-            return "🎯 APOSTAR 🟡 (EMPATE)", score, f"{pattern} | CICLOS {mem}"
-        return f"🎯 APOSTAR {'🔴' if color == 'R' else '🔵'}", score, f"{pattern} | CICLOS {mem}"
+    # Ajuste por contexto
+    if mem.count("CHOPPY") >= 2 and "STREAK" in pattern:
+        score -= 8
+
+    if len(mem) == 3 and mem[0] == mem[2]:
+        score += 4
+
+    # DECISÃO FINAL
+    if score >= 55:
+        if color == "R":
+            return "🎯 APOSTAR 🔴 HOME", score, f"{pattern} | CICLOS {mem}"
+        if color == "B":
+            return "🎯 APOSTAR 🔵 AWAY", score, f"{pattern} | CICLOS {mem}"
+        return "🎯 APOSTAR 🟡 DRAW", score, f"{pattern} | {st.session_state.rounds_without_draw} rodadas sem empate"
 
     return "⏳ AGUARDAR", score, f"{pattern} | CICLOS {mem}"
 
 # =====================================================
-# SAÍDA
+# SAÍDA FINAL
 # =====================================================
 decision, score, context = ia_decision(st.session_state.history)
 
 st.markdown("## 🎯 DECISÃO DA IA")
-st.success(f"{decision} | Score {score}\n\n{context}")
+st.success(f"{decision}\n\nScore: {score}\n\n{context}")
 
 with st.expander("🧠 Memória de 3 Ciclos"):
     st.write(st.session_state.cycle_memory)
+
+with st.expander("🟡 Estatística de Empate"):
+    st.write(f"Rodadas sem Draw: {st.session_state.rounds_without_draw}")
